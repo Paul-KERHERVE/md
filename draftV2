@@ -55,6 +55,10 @@ COLONNE_ID_CIBLE = "id"
 # Dossier de travail par défaut (là où se trouvent les fichiers)
 DOSSIER_TRAVAIL = "Music/projet"
 
+# Noms des fichiers source et cible (à modifier selon vos besoins)
+FICHIER_SOURCE = "source.csv"
+FICHIER_CIBLE = "cible.csv"
+
 #==============================================================================
 # SECTION 2: FONCTIONS POUR LIRE ET ÉCRIRE DES CSV
 #==============================================================================
@@ -280,9 +284,12 @@ def main():
         os.chdir(DOSSIER_TRAVAIL)
         print(f"Répertoire actuel: {os.getcwd()}")
         
-        # 2. Demander les noms des fichiers source et cible
-        source_path = input("Nom du fichier source CSV: ")
-        target_path = input("Nom du fichier cible CSV: ")
+        # 2. Utiliser les noms de fichiers prédéfinis (pas d'input)
+        source_path = FICHIER_SOURCE
+        target_path = FICHIER_CIBLE
+        
+        print(f"Fichier source: {source_path}")
+        print(f"Fichier cible: {target_path}")
         
         # 3. Vérifier si les fichiers existent
         if not os.path.exists(source_path):
@@ -319,7 +326,6 @@ def main():
         print(f"\nUne erreur s'est produite: {str(e)}")
     
     print("==================================================")
-    input("Appuyez sur Entrée pour quitter...")
 
 
 if __name__ == "__main__":
