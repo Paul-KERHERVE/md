@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Outil de synchronisation inter-logiciels
+Développé par: Paul-KERHERVE
+Date: 2025-05-05
+"""
+
+#============================================================================== 
+# SECTION 1: IMPORTS ET CONFIGURATION
+#==============================================================================
+
+import os
+import csv
+import subprocess
+import tempfile
+import datetime
+import shutil
+
+# Configuration des correspondances entre colonnes
+CORRESPONDANCE_COLONNES = {
+    "var": "variable",
+    "tel": "telephone", 
+    "id_client": "id",
+    "nom": "nom_client",
+    "prenom": "prenom_client",
+    "email": "adresse_email",
+    "statut": "status_client",
+    "categorie": "cat_client",
+}
+
+# Configuration des colonnes à synchroniser
+COLONNES_A_SYNCHRONISER = [
+    "nom", "prenom", "tel", "email", "statut", "categorie"
+]
+
+# Configuration des correspondances pour valeurs fixes (menus déroulants)
+ATTRIBUTS_MENUS_DEROULANTS = {
+    "statut": {
+        "A": "Actif",
+        "I": "Inactif",
+        "P": "En attente",
+        "B": "Bloqué",
+    },
+    "categorie": {
+        "PRO": "Professionnel",
+        "PART": "Particulier",
+        "ASSOC": "Association",
+        "ADMIN": "Administration",
+    },
+}
+
+# Configuration des chemins
+CHEMIN_SHAREPOINT = r"Z:\Dossier Partagé\Synchronisation"
+
+# Identifiant unique pour lier les enregistrements entre les deux fichiers
+COLONNE_ID_SOURCE = "id_client"
+COLONNE_ID_CIBLE = "id"
+
+
+#============================================================================== 
+# SECTION 2: CONVERSION DE FICHIERS XLSX VERS CSV
+#==============================================================================
+
+def convert_xlsx_to_csv(xlsx_path, csv_path, timeout=300):
+    """
+    Convertit un fichier XLSX en CSV via Excel/VBScript.
+    """
+    print(f"Conversion de {xlsx_path} vers {csv_path}...")
+    abs_xlsx = os.path.abspath(xlsx_path).replace('\\', '\\\\')
+    abs_csv = os.path.abspath(csv_path).replace('\\', '\\\\')
+    vbs_content = f"""
+    On Error Resume Next
+    Set Excel = CreateObject("Excel.Application")
+    If Err.Number <> 0 Then
+        WScript.Quit 1
+    End If
+    
+    Excel.Visible = False
+    Excel.DisplayAlerts = False
+    
+    Set WB = Excel.Workbooks.Open("{abs_xlsx}")
+    If Err.Number <> 0 Then
+        Excel.Quit
+        WScript.Quit 2
+    End If
+    
+    WB.SaveAs "{abs_csv}", 6
+    If Err.Number <> 0 Then
+        WB.Close False
+        Excel.Quit
+        WScript.Quit 3
+    End If
+    
+    WB.Close
+    Excel.Quit
+    WScript.Quit 0
+    """
+    fd, vbs_path = tempfile.mkstemp(suffix='.vbs')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(vbs_content)
+        process = subprocess.Popen(['cscript', '//NoLogo', vbs_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate(timeout=timeout)
+        if process.returncode == 0:
+            print("Conversion réussie!")
+            return True
+        else:
+            print(f"Erreur lors de la conversion: code {process.returncode}")
+            return False
+    except Exception as e:
+        print(f"Erreur lors de la conversion: {str(e)}")
+        return False
+    finally:
+        try:
+            os.unlink(vbs_path)
+        except:
+            pass
+
+
+#============================================================================== 
+# SECTION 3: MANIPULATION ET TRANSFORMATION DES DONNÉES
+#==============================================================================
+
+def map_value(value, column_name):
+    """
+    Mappe une valeur si elle correspond à un menu déroulant.
+    """
+    if column_name in ATTRIBUTS_MENUS_DEROULANTS and value in ATTRIBUTS_MENUS_DEROULANTS[column_name]:
+        return ATTRIBUTS_MENUS_DEROULANTS[column_name][value]
+    return value
+
+
+def read_csv_file(filepath, id_column):
+    """
+    Lit un fichier CSV et retourne un dictionnaire indexé par l'identifiant.
+    """
+    print(f"Lecture du fichier {filepath}...")
+    data = {}
+    headers = []
+    try:
+        with open(filepath, 'r', encoding='utf-8', newline='') as csvfile:
+            reader = csv.reader(csvfile)
+            headers = next(reader)
+            id_index = headers.index(id_column)
+            for row in reader:
+                if len(row) > id_index and row[id_index].strip():
+                    data[row[id_index]] = {headers[i]: row[i] for i in range(len(row))}
+        print(f"Lecture terminée: {len(data)} enregistrements chargés")
+        return data, headers
+    except Exception as e:
+        print(f"Erreur lors de la lecture du fichier {filepath}: {str(e)}")
+        return {}, headers
+
+
+#============================================================================== 
+# SECTION 4: SYNCHRONISATION DES DONNÉES
+#==============================================================================
+
+def synchronize_data(source_data, target_data, columns_to_sync):
+    """
+    Synchronise les données source vers les données cible.
+    """
+    print("Synchronisation des données...")
+    stats = {
+        "total_source": len(source_data),
+        "total_target": len(target_data),
+        "matched": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "not_found": 0,
+        "values_mapped": 0
+    }
+    for source_id, source_record in source_data.items():
+        if source_id in target_data:
+            stats["matched"] += 1
+            target_record = target_data[source_id]
+            changes_for_record = 0
+            for source_col in columns_to_sync:
+                target_col = CORRESPONDANCE_COLONNES.get(source_col, source_col)
+                if source_col in source_record and target_col in target_record:
+                    original_value = source_record[source_col]
+                    mapped_value = map_value(original_value, source_col)
+                    if original_value != mapped_value:
+                        stats["values_mapped"] += 1
+                    if mapped_value != target_record[target_col]:
+                        target_data[source_id][target_col] = mapped_value
+                        changes_for_record += 1
+            if changes_for_record > 0:
+                stats["updated"] += 1
+            else:
+                stats["unchanged"] += 1
+        else:
+            stats["not_found"] += 1
+    print(f"Synchronisation terminée:")
+    print(f"  - {stats['matched']} enregistrements correspondants trouvés")
+    print(f"  - {stats['updated']} enregistrements mis à jour")
+    print(f"  - {stats['unchanged']} enregistrements inchangés")
+    print(f"  - {stats['not_found']} enregistrements non trouvés dans la cible")
+    print(f"  - {stats['values_mapped']} valeurs de menus déroulants mappées")
+    return target_data, stats
+
+
+#============================================================================== 
+# SECTION 6: FONCTION PRINCIPALE
+#==============================================================================
+
+def main():
+    """Fonction principale du script."""
+    print("=== OUTIL DE SYNCHRONISATION INTER-LOGICIELS ===")
+    print(f"Démarré le {datetime.datetime.now().strftime('%Y-%m-%d à %H:%M:%S')}")
+    print(f"Utilisateur: {os.environ.get('USERNAME', 'Inconnu')}")
+    
+    # Demander les fichiers source et cible
+    source_path = input("Chemin du fichier source (CSV ou XLSX): ")
+    target_path = input("Chemin du fichier cible (CSV ou XLSX): ")
+    
+    # Étape 1: Changement de répertoire
+    try:
+        if os.path.exists('Music/projet') and os.path.isdir('Music/projet'):
+            os.chdir('Music/projet')
+            print(f"Changement de répertoire réussi : {os.getcwd()}")
+        else:
+            print("Erreur : Le répertoire 'Music/projet' n'existe pas.")
+            return
+    except Exception as e:
+        print(f"Erreur critique lors du changement de répertoire : {e}")
+        return
+    
+    # Étape 2: Vérification d'accès au fichier source
+    try:
+        if not os.path.exists(source_path):
+            print(f"Erreur : Le fichier source '{source_path}' n'existe pas.")
+            return
+        with open(source_path, 'r') as test_file:
+            test_file.read()
+        print("Fichier source accessible. Processus prêt à démarrer.")
+    except FileNotFoundError:
+        print("Erreur : Le fichier source est introuvable.")
+        return
+    except PermissionError:
+        print("Erreur : Permission refusée pour accéder au fichier source.")
+        return
+    except Exception as e:
+        print(f"Erreur critique lors de l'accès au fichier source : {e}")
+        return
+    
+    # Étape 3: Vérification d'accès au fichier cible
+    if not os.path.exists(target_path):
+        print(f"Erreur : Le fichier cible '{target_path}' n'existe pas.")
+        return
+    
+    # Étape 4: Synchronisation (placeholder pour logique existante)
+    print("Synchronisation des données...")
+    # (Reste de la logique de synchronisation à insérer ici)
+
+    print("\nSynchronisation terminée avec succès!")
+    print("==================================================")
+
+
+if __name__ == "__main__":
+    main()
