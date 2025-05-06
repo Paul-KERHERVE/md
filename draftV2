@@ -57,6 +57,9 @@ CHEMIN_SHAREPOINT = r"Z:\Dossier Partagé\Synchronisation"
 COLONNE_ID_SOURCE = "id_client"
 COLONNE_ID_CIBLE = "id"
 
+# Chemins des fichiers source et cible
+FICHIER_SOURCE = "source.csv"
+FICHIER_CIBLE = "target.csv"
 
 #============================================================================== 
 # SECTION 2: CONVERSION DE FICHIERS XLSX VERS CSV
@@ -119,89 +122,6 @@ def convert_xlsx_to_csv(xlsx_path, csv_path, timeout=300):
 
 
 #============================================================================== 
-# SECTION 3: MANIPULATION ET TRANSFORMATION DES DONNÉES
-#==============================================================================
-
-def map_value(value, column_name):
-    """
-    Mappe une valeur si elle correspond à un menu déroulant.
-    """
-    if column_name in ATTRIBUTS_MENUS_DEROULANTS and value in ATTRIBUTS_MENUS_DEROULANTS[column_name]:
-        return ATTRIBUTS_MENUS_DEROULANTS[column_name][value]
-    return value
-
-
-def read_csv_file(filepath, id_column):
-    """
-    Lit un fichier CSV et retourne un dictionnaire indexé par l'identifiant.
-    """
-    print(f"Lecture du fichier {filepath}...")
-    data = {}
-    headers = []
-    try:
-        with open(filepath, 'r', encoding='utf-8', newline='') as csvfile:
-            reader = csv.reader(csvfile)
-            headers = next(reader)
-            id_index = headers.index(id_column)
-            for row in reader:
-                if len(row) > id_index and row[id_index].strip():
-                    data[row[id_index]] = {headers[i]: row[i] for i in range(len(row))}
-        print(f"Lecture terminée: {len(data)} enregistrements chargés")
-        return data, headers
-    except Exception as e:
-        print(f"Erreur lors de la lecture du fichier {filepath}: {str(e)}")
-        return {}, headers
-
-
-#============================================================================== 
-# SECTION 4: SYNCHRONISATION DES DONNÉES
-#==============================================================================
-
-def synchronize_data(source_data, target_data, columns_to_sync):
-    """
-    Synchronise les données source vers les données cible.
-    """
-    print("Synchronisation des données...")
-    stats = {
-        "total_source": len(source_data),
-        "total_target": len(target_data),
-        "matched": 0,
-        "updated": 0,
-        "unchanged": 0,
-        "not_found": 0,
-        "values_mapped": 0
-    }
-    for source_id, source_record in source_data.items():
-        if source_id in target_data:
-            stats["matched"] += 1
-            target_record = target_data[source_id]
-            changes_for_record = 0
-            for source_col in columns_to_sync:
-                target_col = CORRESPONDANCE_COLONNES.get(source_col, source_col)
-                if source_col in source_record and target_col in target_record:
-                    original_value = source_record[source_col]
-                    mapped_value = map_value(original_value, source_col)
-                    if original_value != mapped_value:
-                        stats["values_mapped"] += 1
-                    if mapped_value != target_record[target_col]:
-                        target_data[source_id][target_col] = mapped_value
-                        changes_for_record += 1
-            if changes_for_record > 0:
-                stats["updated"] += 1
-            else:
-                stats["unchanged"] += 1
-        else:
-            stats["not_found"] += 1
-    print(f"Synchronisation terminée:")
-    print(f"  - {stats['matched']} enregistrements correspondants trouvés")
-    print(f"  - {stats['updated']} enregistrements mis à jour")
-    print(f"  - {stats['unchanged']} enregistrements inchangés")
-    print(f"  - {stats['not_found']} enregistrements non trouvés dans la cible")
-    print(f"  - {stats['values_mapped']} valeurs de menus déroulants mappées")
-    return target_data, stats
-
-
-#============================================================================== 
 # SECTION 6: FONCTION PRINCIPALE
 #==============================================================================
 
@@ -210,10 +130,6 @@ def main():
     print("=== OUTIL DE SYNCHRONISATION INTER-LOGICIELS ===")
     print(f"Démarré le {datetime.datetime.now().strftime('%Y-%m-%d à %H:%M:%S')}")
     print(f"Utilisateur: {os.environ.get('USERNAME', 'Inconnu')}")
-    
-    # Demander les fichiers source et cible
-    source_path = input("Chemin du fichier source (CSV ou XLSX): ")
-    target_path = input("Chemin du fichier cible (CSV ou XLSX): ")
     
     # Étape 1: Changement de répertoire
     try:
@@ -229,10 +145,10 @@ def main():
     
     # Étape 2: Vérification d'accès au fichier source
     try:
-        if not os.path.exists(source_path):
-            print(f"Erreur : Le fichier source '{source_path}' n'existe pas.")
+        if not os.path.exists(FICHIER_SOURCE):
+            print(f"Erreur : Le fichier source '{FICHIER_SOURCE}' n'existe pas.")
             return
-        with open(source_path, 'r') as test_file:
+        with open(FICHIER_SOURCE, 'r') as test_file:
             test_file.read()
         print("Fichier source accessible. Processus prêt à démarrer.")
     except FileNotFoundError:
@@ -246,8 +162,8 @@ def main():
         return
     
     # Étape 3: Vérification d'accès au fichier cible
-    if not os.path.exists(target_path):
-        print(f"Erreur : Le fichier cible '{target_path}' n'existe pas.")
+    if not os.path.exists(FICHIER_CIBLE):
+        print(f"Erreur : Le fichier cible '{FICHIER_CIBLE}' n'existe pas.")
         return
     
     # Étape 4: Synchronisation (placeholder pour logique existante)
