@@ -6,19 +6,16 @@ Développé par: Paul-KERHERVE
 Date: 2025-05-06
 """
 
-#==============================================================================
-# SECTION 1: IMPORTS ET CONFIGURATION
-#==============================================================================
-
 import os
 import csv
-import subprocess
-import tempfile
 import datetime
 import shutil
-import sys
 
-# Configuration des correspondances entre colonnes
+#==============================================================================
+# SECTION 1: CONFIGURATION
+#==============================================================================
+
+# Configuration des correspondances entre colonnes source et cible
 CORRESPONDANCE_COLONNES = {
     "var": "variable",
     "tel": "telephone", 
@@ -30,12 +27,12 @@ CORRESPONDANCE_COLONNES = {
     "categorie": "cat_client",
 }
 
-# Configuration des colonnes à synchroniser
+# Colonnes que nous voulons synchroniser
 COLONNES_A_SYNCHRONISER = [
     "nom", "prenom", "tel", "email", "statut", "categorie"
 ]
 
-# Configuration des correspondances pour valeurs fixes (menus déroulants)
+# Configuration des correspondances pour valeurs de menus déroulants
 ATTRIBUTS_MENUS_DEROULANTS = {
     "statut": {
         "A": "Actif",
@@ -51,128 +48,23 @@ ATTRIBUTS_MENUS_DEROULANTS = {
     },
 }
 
-# Configuration des chemins
-CHEMIN_SHAREPOINT = r"Z:\Dossier Partagé\Synchronisation"
-
-# Dossier de travail par défaut (peut être modifié par l'utilisateur)
-DOSSIER_TRAVAIL_DEFAUT = "Music/projet"
-
-# Identifiant unique pour lier les enregistrements entre les deux fichiers
+# Identifiants uniques pour faire correspondre les enregistrements
 COLONNE_ID_SOURCE = "id_client"
 COLONNE_ID_CIBLE = "id"
 
+# Dossier de travail par défaut (là où se trouvent les fichiers)
+DOSSIER_TRAVAIL = "Music/projet"
 
 #==============================================================================
-# SECTION 2: CONVERSION DE FICHIERS XLSX VERS CSV
+# SECTION 2: FONCTIONS POUR LIRE ET ÉCRIRE DES CSV
 #==============================================================================
-
-def convert_xlsx_to_csv(xlsx_path, csv_path, timeout=300):
-    """
-    Convertit un fichier XLSX en CSV via Excel/VBScript.
-    
-    Args:
-        xlsx_path: Chemin du fichier XLSX source
-        csv_path: Chemin du fichier CSV de destination
-        timeout: Temps maximum d'attente en secondes (défaut: 5 minutes)
-    
-    Returns:
-        bool: True si succès, False sinon
-    """
-    print(f"Conversion de {xlsx_path} vers {csv_path}...")
-    
-    # Chemin absolu avec échappement des backslashes
-    abs_xlsx = os.path.abspath(xlsx_path).replace('\\', '\\\\')
-    abs_csv = os.path.abspath(csv_path).replace('\\', '\\\\')
-    
-    # Script VBS avec gestion d'erreurs basique
-    vbs_content = f"""
-    On Error Resume Next
-    Set Excel = CreateObject("Excel.Application")
-    If Err.Number <> 0 Then
-        WScript.Quit 1
-    End If
-    
-    Excel.Visible = False
-    Excel.DisplayAlerts = False
-    
-    Set WB = Excel.Workbooks.Open("{abs_xlsx}")
-    If Err.Number <> 0 Then
-        Excel.Quit
-        WScript.Quit 2
-    End If
-    
-    WB.SaveAs "{abs_csv}", 6  ' 6 = Format CSV
-    If Err.Number <> 0 Then
-        WB.Close False
-        Excel.Quit
-        WScript.Quit 3
-    End If
-    
-    WB.Close
-    Excel.Quit
-    WScript.Quit 0
-    """
-    
-    # Écrire et exécuter le script VBS
-    fd, vbs_path = tempfile.mkstemp(suffix='.vbs')
-    try:
-        with os.fdopen(fd, 'w') as f:
-            f.write(vbs_content)
-        
-        process = subprocess.Popen(['cscript', '//NoLogo', vbs_path], 
-                                  stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE)
-        
-        stdout, stderr = process.communicate(timeout=timeout)
-        if process.returncode == 0:
-            print("Conversion réussie!")
-            return True
-        else:
-            print(f"Erreur lors de la conversion: code {process.returncode}")
-            if process.returncode == 2:
-                print("Excel n'a pas pu ouvrir le fichier. Vérifiez qu'il n'est pas ouvert dans une autre application.")
-            return False
-            
-    except Exception as e:
-        print(f"Erreur lors de la conversion: {str(e)}")
-        return False
-    finally:
-        # Nettoyer le fichier temporaire
-        try:
-            os.unlink(vbs_path)
-        except:
-            pass
-
-
-#==============================================================================
-# SECTION 3: MANIPULATION ET TRANSFORMATION DES DONNÉES
-#==============================================================================
-
-def map_value(value, column_name):
-    """
-    Mappe une valeur si elle correspond à un menu déroulant.
-    
-    Args:
-        value: La valeur à transformer
-        column_name: Le nom de la colonne
-    
-    Returns:
-        La valeur transformée ou la valeur originale
-    """
-    # Vérifier si c'est une valeur de menu déroulant à mapper
-    if column_name in ATTRIBUTS_MENUS_DEROULANTS and value in ATTRIBUTS_MENUS_DEROULANTS[column_name]:
-        return ATTRIBUTS_MENUS_DEROULANTS[column_name][value]
-    
-    # Sinon, retourner la valeur non modifiée
-    return value
-
 
 def read_csv_file(filepath, id_column):
     """
-    Lit un fichier CSV et retourne un dictionnaire indexé par l'identifiant.
+    Lit un fichier CSV et retourne un dictionnaire indexé par l'ID.
     
     Args:
-        filepath: Chemin du fichier CSV à lire
+        filepath: Nom ou chemin du fichier CSV
         id_column: Nom de la colonne contenant l'identifiant unique
         
     Returns:
@@ -183,141 +75,48 @@ def read_csv_file(filepath, id_column):
     headers = []
     
     try:
+        # Ouvrir le fichier en mode lecture
         with open(filepath, 'r', encoding='utf-8', newline='') as csvfile:
             reader = csv.reader(csvfile)
-            headers = next(reader)  # Lire les entêtes
+            headers = next(reader)  # Première ligne = entêtes
             
             # Trouver l'index de la colonne ID
             try:
                 id_index = headers.index(id_column)
             except ValueError:
                 print(f"Erreur: Colonne '{id_column}' non trouvée dans {filepath}")
-                print(f"Colonnes disponibles: {', '.join(headers)}")
                 return {}, headers
             
-            # Lire les données et indexer par ID
-            row_count = 0
+            # Lire chaque ligne et créer un dictionnaire par ID
             for row in reader:
-                row_count += 1
-                if len(row) <= id_index:
-                    print(f"Attention: Ligne {row_count} ignorée (nombre de colonnes insuffisant)")
-                    continue
-                    
-                if row[id_index].strip():
-                    data[row[id_index]] = {headers[i]: row[i] for i in range(len(row))}
-                else:
-                    print(f"Attention: Ligne {row_count} ignorée (ID manquant)")
+                if len(row) > id_index and row[id_index].strip():
+                    record_id = row[id_index]
+                    # Créer un dictionnaire {nom_colonne: valeur}
+                    data[record_id] = {headers[i]: row[i] for i in range(len(row))}
         
         print(f"Lecture terminée: {len(data)} enregistrements chargés")
         return data, headers
         
     except UnicodeDecodeError:
-        print(f"Erreur: Problème d'encodage dans {filepath}")
-        print("Le fichier n'est peut-être pas encodé en UTF-8. Tentative avec un encodage alternatif...")
+        # Si erreur d'encodage UTF-8, essayer Latin-1
+        print(f"Problème d'encodage UTF-8, tentative avec Latin-1...")
         try:
-            # Essayer avec l'encodage ISO-8859-1 (Latin-1)
             with open(filepath, 'r', encoding='latin-1', newline='') as csvfile:
                 reader = csv.reader(csvfile)
                 headers = next(reader)
-                
-                try:
-                    id_index = headers.index(id_column)
-                except ValueError:
-                    print(f"Erreur: Colonne '{id_column}' non trouvée dans {filepath}")
-                    return {}, headers
-                
+                id_index = headers.index(id_column)
                 for row in reader:
                     if len(row) > id_index and row[id_index].strip():
                         data[row[id_index]] = {headers[i]: row[i] for i in range(len(row))}
-            
-            print(f"Lecture terminée (encodage latin-1): {len(data)} enregistrements chargés")
+            print(f"Lecture terminée avec Latin-1: {len(data)} enregistrements")
             return data, headers
         except Exception as e:
-            print(f"Échec de la lecture alternative: {str(e)}")
+            print(f"Échec de la lecture: {str(e)}")
             return {}, headers
     except Exception as e:
-        print(f"Erreur lors de la lecture du fichier {filepath}: {str(e)}")
-        print(f"Type d'erreur: {type(e).__name__}")
+        print(f"Erreur lors de la lecture: {str(e)}")
         return {}, headers
 
-
-#==============================================================================
-# SECTION 4: SYNCHRONISATION DES DONNÉES
-#==============================================================================
-
-def synchronize_data(source_data, target_data, columns_to_sync):
-    """
-    Synchronise les données source vers les données cible.
-    
-    Args:
-        source_data: Dictionnaire des données source
-        target_data: Dictionnaire des données cible
-        columns_to_sync: Liste des colonnes à synchroniser
-        
-    Returns:
-        Tuple (données mises à jour, statistiques)
-    """
-    print("Synchronisation des données...")
-    stats = {
-        "total_source": len(source_data),
-        "total_target": len(target_data),
-        "matched": 0,
-        "updated": 0,
-        "unchanged": 0,
-        "not_found": 0,
-        "values_mapped": 0
-    }
-    
-    # Pour chaque enregistrement dans la source
-    for source_id, source_record in source_data.items():
-        # Trouver l'enregistrement correspondant dans la cible
-        if source_id in target_data:
-            stats["matched"] += 1
-            target_record = target_data[source_id]
-            
-            # Compter les changements pour cet enregistrement
-            changes_for_record = 0
-            
-            # Pour chaque colonne à synchroniser
-            for source_col in columns_to_sync:
-                # Trouver la colonne correspondante dans la cible
-                target_col = CORRESPONDANCE_COLONNES.get(source_col, source_col)
-                
-                # Vérifier si la colonne existe dans les deux fichiers
-                if source_col in source_record and target_col in target_record:
-                    # Traiter les valeurs de menus déroulants
-                    original_value = source_record[source_col]
-                    mapped_value = map_value(original_value, source_col)
-                    
-                    # Compter les mappings appliqués
-                    if original_value != mapped_value:
-                        stats["values_mapped"] += 1
-                    
-                    # Si les valeurs sont différentes, mettre à jour
-                    if mapped_value != target_record[target_col]:
-                        target_data[source_id][target_col] = mapped_value
-                        changes_for_record += 1
-            
-            if changes_for_record > 0:
-                stats["updated"] += 1
-            else:
-                stats["unchanged"] += 1
-        else:
-            stats["not_found"] += 1
-    
-    print(f"Synchronisation terminée:")
-    print(f"  - {stats['matched']} enregistrements correspondants trouvés")
-    print(f"  - {stats['updated']} enregistrements mis à jour")
-    print(f"  - {stats['unchanged']} enregistrements inchangés")
-    print(f"  - {stats['not_found']} enregistrements non trouvés dans la cible")
-    print(f"  - {stats['values_mapped']} valeurs de menus déroulants mappées")
-    
-    return target_data, stats
-
-
-#==============================================================================
-# SECTION 5: GESTION DES FICHIERS (SAUVEGARDE ET ÉCRITURE)
-#==============================================================================
 
 def write_csv_file(data, headers, filepath):
     """
@@ -341,15 +140,104 @@ def write_csv_file(data, headers, filepath):
             
             # Écrire les données
             for record_id, record in data.items():
+                # Construire chaque ligne en maintenant l'ordre des colonnes
                 row = [record.get(header, "") for header in headers]
                 writer.writerow(row)
         
         print(f"Écriture terminée: {len(data)} enregistrements écrits")
         return True
-        
     except Exception as e:
-        print(f"Erreur lors de l'écriture du fichier {filepath}: {str(e)}")
+        print(f"Erreur lors de l'écriture: {str(e)}")
         return False
+
+
+#==============================================================================
+# SECTION 3: SYNCHRONISATION DES DONNÉES
+#==============================================================================
+
+def map_value(value, column_name):
+    """
+    Convertit une valeur selon les correspondances des menus déroulants.
+    
+    Args:
+        value: La valeur à transformer
+        column_name: Le nom de la colonne
+    
+    Returns:
+        La valeur transformée ou la valeur originale
+    """
+    # Si la colonne a des valeurs de menu déroulant et la valeur existe dans ce menu
+    if column_name in ATTRIBUTS_MENUS_DEROULANTS and value in ATTRIBUTS_MENUS_DEROULANTS[column_name]:
+        return ATTRIBUTS_MENUS_DEROULANTS[column_name][value]
+    
+    # Sinon, ne pas modifier la valeur
+    return value
+
+
+def synchronize_data(source_data, target_data, columns_to_sync):
+    """
+    Synchronise les données source vers les données cible.
+    
+    Args:
+        source_data: Dictionnaire des données source
+        target_data: Dictionnaire des données cible
+        columns_to_sync: Liste des colonnes à synchroniser
+        
+    Returns:
+        Tuple (données mises à jour, statistiques)
+    """
+    print("Synchronisation des données...")
+    stats = {
+        "total_source": len(source_data),
+        "total_target": len(target_data),
+        "matched": 0,      # Enregistrements trouvés dans les deux fichiers
+        "updated": 0,      # Enregistrements modifiés
+        "unchanged": 0,    # Enregistrements trouvés mais non modifiés
+        "not_found": 0     # IDs source non trouvés dans la cible
+    }
+    
+    # Pour chaque enregistrement dans la source
+    for source_id, source_record in source_data.items():
+        # Est-ce que cet ID existe dans la cible?
+        if source_id in target_data:
+            stats["matched"] += 1
+            target_record = target_data[source_id]
+            
+            # Compter les changements pour cet enregistrement
+            changes_for_record = 0
+            
+            # Pour chaque colonne à synchroniser
+            for source_col in columns_to_sync:
+                # Trouver le nom de la colonne correspondante dans la cible
+                target_col = CORRESPONDANCE_COLONNES.get(source_col, source_col)
+                
+                # Si les deux fichiers ont cette colonne
+                if source_col in source_record and target_col in target_record:
+                    # Convertir la valeur si nécessaire (ex: "A" → "Actif")
+                    original_value = source_record[source_col]
+                    mapped_value = map_value(original_value, source_col)
+                    
+                    # Si les valeurs sont différentes, mettre à jour
+                    if mapped_value != target_record[target_col]:
+                        target_data[source_id][target_col] = mapped_value
+                        changes_for_record += 1
+            
+            # Compter cet enregistrement comme mis à jour ou inchangé
+            if changes_for_record > 0:
+                stats["updated"] += 1
+            else:
+                stats["unchanged"] += 1
+        else:
+            # ID source non trouvé dans la cible
+            stats["not_found"] += 1
+    
+    print(f"Synchronisation terminée:")
+    print(f"  - {stats['matched']} enregistrements correspondants trouvés")
+    print(f"  - {stats['updated']} enregistrements mis à jour")
+    print(f"  - {stats['unchanged']} enregistrements inchangés")
+    print(f"  - {stats['not_found']} enregistrements non trouvés dans la cible")
+    
+    return target_data, stats
 
 
 def create_backup(filepath):
@@ -360,7 +248,7 @@ def create_backup(filepath):
         filepath: Chemin du fichier à sauvegarder
         
     Returns:
-        str: Chemin du fichier de sauvegarde
+        str: Chemin du fichier de sauvegarde ou None si échec
     """
     if not os.path.exists(filepath):
         return None
@@ -373,239 +261,64 @@ def create_backup(filepath):
         print(f"Sauvegarde créée: {backup_path}")
         return backup_path
     except Exception as e:
-        print(f"Erreur lors de la création de la sauvegarde: {str(e)}")
+        print(f"Erreur lors de la sauvegarde: {str(e)}")
         return None
 
 
 #==============================================================================
-# SECTION 6: FONCTIONS DE CONFIGURATION ET D'AIDE
-#==============================================================================
-
-def setup_working_directory():
-    """
-    Configure le répertoire de travail et affiche les informations de session.
-    
-    Returns:
-        bool: True si le répertoire a été configuré avec succès, False sinon
-    """
-    print("=== OUTIL DE SYNCHRONISATION INTER-LOGICIELS ===")
-    print(f"Démarré le {datetime.datetime.now().strftime('%Y-%m-%d à %H:%M:%S')}")
-    print(f"Utilisateur: {os.environ.get('USERNAME', 'Inconnu')}")
-    
-    original_dir = os.getcwd()
-    print(f"Répertoire de travail initial: {original_dir}")
-    
-    # Demander le répertoire de travail
-    use_custom_dir = input(f"Utiliser un répertoire de travail spécifique? (o/N): ").lower() == 'o'
-    
-    if use_custom_dir:
-        work_dir = input(f"Chemin du répertoire de travail (défaut: {DOSSIER_TRAVAIL_DEFAUT}): ")
-        if not work_dir.strip():
-            work_dir = DOSSIER_TRAVAIL_DEFAUT
-    else:
-        work_dir = DOSSIER_TRAVAIL_DEFAUT
-    
-    # Changer le répertoire de travail
-    try:
-        os.chdir(work_dir)
-        current_dir = os.getcwd()
-        print(f"Répertoire de travail changé pour: {current_dir}")
-        
-        # Lister les fichiers CSV et XLSX disponibles
-        print("\nFichiers disponibles dans ce répertoire:")
-        found_files = False
-        for file in os.listdir('.'):
-            if file.endswith('.csv') or file.endswith('.xlsx'):
-                print(f"  - {file}")
-                found_files = True
-        
-        if not found_files:
-            print("  Aucun fichier CSV ou XLSX trouvé dans ce répertoire")
-            print(f"  Contenu du répertoire: {', '.join(os.listdir('.'))}")
-        
-        return True
-        
-    except FileNotFoundError:
-        print(f"Erreur: Le répertoire '{work_dir}' n'existe pas.")
-        create_dir = input(f"Voulez-vous créer ce répertoire? (o/N): ").lower() == 'o'
-        
-        if create_dir:
-            try:
-                os.makedirs(work_dir)
-                os.chdir(work_dir)
-                print(f"Répertoire créé et défini comme répertoire de travail: {work_dir}")
-                return True
-            except Exception as e:
-                print(f"Erreur lors de la création du répertoire: {str(e)}")
-                return False
-        return False
-        
-    except PermissionError:
-        print(f"Erreur: Accès refusé au répertoire '{work_dir}'.")
-        print("Vérifiez que vous avez les autorisations nécessaires.")
-        return False
-        
-    except Exception as e:
-        print(f"Erreur lors du changement de répertoire: {str(e)}")
-        return False
-
-
-def test_file_access(filepath):
-    """
-    Teste l'accès à un fichier et affiche des informations de diagnostic.
-    
-    Args:
-        filepath: Chemin du fichier à tester
-        
-    Returns:
-        bool: True si le fichier est accessible, False sinon
-    """
-    print(f"\nTest d'accès pour: {filepath}")
-    
-    # Vérifier si le fichier existe
-    if not os.path.exists(filepath):
-        print(f"  ❌ Le fichier n'existe pas!")
-        print(f"  📂 Répertoire de travail actuel: {os.getcwd()}")
-        return False
-    
-    print(f"  ✅ Le fichier existe")
-    
-    # Tester l'accès en lecture
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            first_chars = f.read(50)
-            print(f"  ✅ Lecture réussie! Premiers caractères: {first_chars[:20]}...")
-            return True
-    except PermissionError:
-        print(f"  ❌ Permission refusée pour lire le fichier")
-        return False
-    except UnicodeDecodeError:
-        print(f"  ⚠️ Problème d'encodage UTF-8, tentative avec Latin-1...")
-        try:
-            with open(filepath, 'r', encoding='latin-1') as f:
-                first_chars = f.read(50)
-                print(f"  ✅ Lecture réussie avec Latin-1! Premiers caractères: {first_chars[:20]}...")
-                return True
-        except Exception as e2:
-            print(f"  ❌ Erreur de lecture avec Latin-1: {str(e2)}")
-            return False
-    except Exception as e:
-        print(f"  ❌ Erreur de lecture: {type(e).__name__}: {str(e)}")
-        return False
-
-
-#==============================================================================
-# SECTION 7: FONCTION PRINCIPALE
+# SECTION 4: FONCTION PRINCIPALE
 #==============================================================================
 
 def main():
     """Fonction principale du script."""
+    print("=== OUTIL DE SYNCHRONISATION INTER-LOGICIELS ===")
+    print(f"Démarré le {datetime.datetime.now().strftime('%Y-%m-%d à %H:%M:%S')}")
+    
     try:
-        # Configurer le répertoire de travail
-        if not setup_working_directory():
-            print("Configuration du répertoire de travail échouée. Utilisation du répertoire par défaut.")
+        # 1. Changer le répertoire de travail (résout les problèmes de permission)
+        print(f"Changement du répertoire de travail vers: {DOSSIER_TRAVAIL}")
+        os.chdir(DOSSIER_TRAVAIL)
+        print(f"Répertoire actuel: {os.getcwd()}")
         
-        # Demander les fichiers source et cible (noms simples, pas chemins complets)
-        source_path = input("\nNom du fichier source (CSV ou XLSX): ")
-        target_path = input("Nom du fichier cible (CSV ou XLSX): ")
+        # 2. Demander les noms des fichiers source et cible
+        source_path = input("Nom du fichier source CSV: ")
+        target_path = input("Nom du fichier cible CSV: ")
         
-        # Tester l'accès aux fichiers
-        source_accessible = test_file_access(source_path)
-        target_accessible = test_file_access(target_path)
-        
-        if not source_accessible or not target_accessible:
-            print("\nProblème d'accès aux fichiers. Vérifiez les noms et les permissions.")
-            input("Appuyez sur Entrée pour quitter...")
+        # 3. Vérifier si les fichiers existent
+        if not os.path.exists(source_path):
+            print(f"Erreur: Le fichier source '{source_path}' n'existe pas.")
+            return
+        if not os.path.exists(target_path):
+            print(f"Erreur: Le fichier cible '{target_path}' n'existe pas.")
             return
         
-        # Créer des chemins temporaires pour les fichiers CSV
-        temp_dir = tempfile.mkdtemp()
-        source_csv = source_path
-        target_csv = target_path
+        # 4. Créer une sauvegarde du fichier cible
+        create_backup(target_path)
         
-        # Convertir en CSV si nécessaire
-        if source_path.lower().endswith('.xlsx'):
-            source_csv = os.path.join(temp_dir, "source_temp.csv")
-            if not convert_xlsx_to_csv(source_path, source_csv):
-                print("Erreur: Impossible de convertir le fichier source en CSV.")
-                input("Appuyez sur Entrée pour quitter...")
-                return
+        # 5. Lire les données des fichiers CSV
+        source_data, source_headers = read_csv_file(source_path, COLONNE_ID_SOURCE)
+        target_data, target_headers = read_csv_file(target_path, COLONNE_ID_CIBLE)
         
-        if target_path.lower().endswith('.xlsx'):
-            target_csv = os.path.join(temp_dir, "target_temp.csv")
-            if not convert_xlsx_to_csv(target_path, target_csv):
-                print("Erreur: Impossible de convertir le fichier cible en CSV.")
-                input("Appuyez sur Entrée pour quitter...")
-                return
-        
-        # Lire les données
-        source_data, source_headers = read_csv_file(source_csv, COLONNE_ID_SOURCE)
-        target_data, target_headers = read_csv_file(target_csv, COLONNE_ID_CIBLE)
-        
-        if not source_data:
-            print("Erreur: Aucune donnée valide trouvée dans le fichier source.")
-            input("Appuyez sur Entrée pour quitter...")
-            return
-            
-        if not target_data:
-            print("Erreur: Aucune donnée valide trouvée dans le fichier cible.")
-            input("Appuyez sur Entrée pour quitter...")
+        if not source_data or not target_data:
+            print("Erreur: Impossible de lire les données des fichiers.")
             return
         
-        # Créer une sauvegarde du fichier cible
-        backup_path = create_backup(target_path)
-        if not backup_path:
-            confirmation = input("Attention: Impossible de créer une sauvegarde du fichier cible. Continuer quand même? (o/N): ")
-            if confirmation.lower() != 'o':
-                print("Opération annulée.")
-                input("Appuyez sur Entrée pour quitter...")
-                return
-        
-        # Synchroniser les données
+        # 6. Synchroniser les données
         updated_data, stats = synchronize_data(source_data, target_data, COLONNES_A_SYNCHRONISER)
         
-        # Générer le nom du fichier de sortie
+        # 7. Générer un nom pour le fichier de sortie
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
         output_filename = f"données_synchronisées_{timestamp}.csv"
         
-        # Écrire le fichier de sortie local
+        # 8. Écrire le fichier de sortie
         if write_csv_file(updated_data, target_headers, output_filename):
             print(f"Fichier mis à jour créé: {output_filename}")
-            
-            # Si le chemin SharePoint est spécifié et accessible, copier le fichier
-            if CHEMIN_SHAREPOINT and os.path.exists(CHEMIN_SHAREPOINT) and os.path.isdir(CHEMIN_SHAREPOINT):
-                copy_to_sharepoint = input(f"Copier le fichier résultat vers SharePoint ({CHEMIN_SHAREPOINT})? (o/N): ").lower() == 'o'
-                if copy_to_sharepoint:
-                    sharepoint_output_path = os.path.join(CHEMIN_SHAREPOINT, output_filename)
-                    try:
-                        shutil.copy2(output_filename, sharepoint_output_path)
-                        print(f"Fichier copié sur SharePoint: {sharepoint_output_path}")
-                    except Exception as e:
-                        print(f"Erreur lors de la copie vers SharePoint: {str(e)}")
-                        print(f"Le fichier est disponible localement: {output_filename}")
-        else:
-            print("Erreur lors de l'écriture du fichier de sortie.")
-            input("Appuyez sur Entrée pour quitter...")
-            return
+            print("\nSynchronisation terminée avec succès!")
         
-        # Nettoyer les fichiers temporaires
-        try:
-            shutil.rmtree(temp_dir)
-        except:
-            pass
-        
-        print("\nSynchronisation terminée avec succès!")
-        print(f"Résumé: {stats['updated']} enregistrements mis à jour sur {stats['matched']} correspondants")
-        
-    except KeyboardInterrupt:
-        print("\nOpération interrompue par l'utilisateur.")
     except Exception as e:
-        print(f"\nUne erreur inattendue s'est produite: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        print(f"\nUne erreur s'est produite: {str(e)}")
     
     print("==================================================")
-    # Attendre une touche pour fermer
     input("Appuyez sur Entrée pour quitter...")
 
 
