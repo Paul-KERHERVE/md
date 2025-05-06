@@ -1,0 +1,27 @@
+import os
+
+def check_file(file_path):
+    print(f"Test pour: {file_path}")
+    
+    # Le fichier existe-t-il?
+    if not os.path.exists(file_path):
+        print("❌ Le fichier n'existe pas à cet emplacement!")
+        return
+    
+    print("✅ Le fichier existe")
+    
+    # Permissions
+    print(f"Permissions de lecture: {'✅' if os.access(file_path, os.R_OK) else '❌'}")
+    print(f"Permissions d'écriture: {'✅' if os.access(file_path, os.W_OK) else '❌'}")
+    
+    # Test d'ouverture réelle
+    try:
+        with open(file_path, 'r') as f:
+            first_chars = f.read(50)
+            print(f"✅ Ouverture réussie! Premiers caractères: {first_chars}")
+    except Exception as e:
+        print(f"❌ Erreur lors de l'ouverture: {type(e).__name__}: {e}")
+
+# Exemple d'utilisation
+file_path = input("Entrez le chemin complet du fichier (avec le nom): ")
+check_file(file_path)
