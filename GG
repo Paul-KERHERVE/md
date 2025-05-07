@@ -1,1 +1,417 @@
+import csv
+import os
+import shutil
+import subprocess
+import tempfile
+import sys # Utilisé pour sys.exit en cas d'erreur critique
 
+# --- CONFIGURATION UTILISATEUR START ---
+# MODIFIEZ ATTENTIVEMENT CETTE SECTION SELON VOS BESOINS
+
+# Chemins vers les fichiers source (ServiceNow) et cible (MyAPM)
+# Peuvent être des fichiers .csv ou .xlsx. Le script gérera la conversion si .xlsx.
+SOURCE_FILE_PATH = "ServiceNow_Export.xlsx"  # Exemple: "C:\\Exports\\ServiceNow_Data.xlsx"
+TARGET_FILE_PATH = "MyAPM_Export.xlsx"      # Exemple: "C:\\Exports\\MyAPM_Data.xlsx"
+
+# Répertoire de sortie sur SharePoint (lecteur réseau mappé)
+# Le nom du fichier de sortie sera basé sur le nom du fichier cible avec "_updated.csv"
+SHAREPOINT_OUTPUT_DIRECTORY = "S:\\EspacePartage\\Synchronisation" # Exemple: "P:\\EquipeITRisk\\FichiersSynchronises"
+# Assurez-vous que ce chemin existe et que vous avez les droits d'écriture.
+
+# Noms des colonnes contenant l'identifiant unique dans les fichiers source et cible
+# Ces colonnes sont cruciales pour faire correspondre les enregistrements.
+UNIQUE_ID_COLUMN_SOURCE = "ID_Application_SN" # Nom de la colonne ID dans ServiceNow
+UNIQUE_ID_COLUMN_TARGET = "ID_Application_APM" # Nom de la colonne ID dans MyAPM
+
+# Correspondance des colonnes et transformations optionnelles
+# Format: {
+#   'NomColonneSource': ('NomColonneCible', fonction_de_transformation_optionnelle)
+# }
+# - 'NomColonneSource': Nom de la colonne dans le fichier exporté de ServiceNow.
+# - 'NomColonneCible': Nom de la colonne correspondante dans le fichier MyAPM à mettre à jour.
+# - fonction_de_transformation_optionnelle:
+#   - Mettez None si aucune transformation n'est nécessaire (copie directe de la valeur).
+#   - Sinon, fournissez une fonction qui prend la valeur de la source en argument
+#     et retourne la valeur transformée pour la cible.
+
+# Exemple de fonction de transformation (à adapter ou supprimer si non nécessaire)
+def transformer_statut(valeur_source):
+    """Transforme les statuts de ServiceNow vers ceux de MyAPM."""
+    valeur_source_str = str(valeur_source).strip().lower()
+    correspondances = {
+        "actif": "En production",
+        "inactif": "Retiré",
+        "en développement": "En projet"
+        # Ajoutez d'autres correspondances ici
+    }
+    return correspondances.get(valeur_source_str, valeur_source) # Retourne la valeur originale si non trouvée
+
+def normaliser_code_asset(valeur_source):
+    """Exemple pour gérer "A4" vs "4A". Adaptez la logique."""
+    val_str = str(valeur_source).strip()
+    if len(val_str) == 2 and val_str[0].isalpha() and val_str[1].isdigit():
+        # Si format LettreChiffre (ex: A4), inverse pour ChiffreLettre (ex: 4A)
+        return val_str[1] + val_str[0]
+    # Ajoutez d'autres logiques si nécessaire (ex: si c'est déjà 4A, ne rien faire)
+    return val_str # Retourne la valeur telle quelle si le pattern ne correspond pas
+
+COLUMN_MAPPING = {
+    "NomApplication": ("Nom_App_Complet", None),
+    "ResponsableMétier": ("Contact_Metier_Principal", None),
+    "StatutOpérationnel": ("Phase_Cycle_Vie", transformer_statut),
+    "CodeAsset": ("Identifiant_Interne_Asset", normaliser_code_asset),
+    # ---- IMPORTANT : Ajoutez ici TOUTES vos correspondances ----
+    # Exemple:
+    # "nom_col_servicenow_1": ("nom_col_myapm_1", None),
+    # "nom_col_servicenow_2": ("nom_col_myapm_2", ma_fonction_de_transformation_specifique),
+}
+
+# Encodage pour la lecture et l'écriture des fichiers CSV.
+# 'utf-8-sig' est recommandé pour gérer le BOM (Byte Order Mark) que Excel peut ajouter.
+# Si vous rencontrez des problèmes d'accentuation, essayez 'latin-1' ou 'cp1252'.
+CSV_ENCODING = 'utf-8-sig'
+
+# --- CONFIGURATION UTILISATEUR END ---
+
+
+# --- Fonctions utilitaires (normalement pas besoin de modifier ci-dessous) ---
+
+def _generer_script_vbs(chemin_script_vbs):
+    """Génère le contenu du VBScript pour la conversion Excel -> CSV."""
+    # Ce script VBS prend deux arguments: chemin_fichier_xlsx_entree et chemin_fichier_csv_sortie
+    contenu_vbs = f"""
+Option Explicit
+Dim oExcel, oBook, Ws
+Dim sFileIn, sFileOut
+
+If WScript.Arguments.Count < 2 Then
+    WScript.Echo "Usage: cscript {os.path.basename(chemin_script_vbs)} <InputFile.xlsx> <OutputFile.csv>"
+    WScript.Quit 1
+End If
+
+sFileIn = WScript.Arguments(0)
+sFileOut = WScript.Arguments(1)
+
+On Error Resume Next
+Set oExcel = CreateObject("Excel.Application")
+If Err.Number <> 0 Then
+    WScript.Echo "Erreur: Impossible de créer l'objet Excel. Excel est-il installé ?"
+    WScript.Quit 2
+End If
+On Error GoTo 0 ' Désactiver la gestion d'erreur globale pour un contrôle plus fin
+
+oExcel.DisplayAlerts = False ' Pour éviter les popups de confirmation (écrasement, etc.)
+
+On Error Resume Next ' Gérer erreur si fichier non trouvé ou corrompu
+Set oBook = oExcel.Workbooks.Open(sFileIn)
+If Err.Number <> 0 Then
+    WScript.Echo "Erreur: Impossible d'ouvrir le fichier Excel: " & sFileIn & " - " & Err.Description
+    oExcel.Quit
+    Set oExcel = Nothing
+    WScript.Quit 3
+End If
+On Error GoTo 0
+
+' Sauvegarder en format CSV (valeur 6 pour xlCSV)
+' Utilisation de Local:=True pour tenter de respecter les séparateurs locaux (virgule/point-virgule)
+' Si des problèmes de délimiteur CSV persistent, cette ligne pourrait nécessiter ajustement.
+On Error Resume Next
+oBook.SaveAs sFileOut, 6 ' 6 = xlCSV
+If Err.Number <> 0 Then
+    WScript.Echo "Erreur: Impossible de sauvegarder en CSV: " & sFileOut & " - " & Err.Description
+    oBook.Close False
+    oExcel.Quit
+    Set oExcel = Nothing
+    WScript.Quit 4
+End If
+On Error GoTo 0
+
+oBook.Close False
+oExcel.Quit
+
+Set oBook = Nothing
+Set oExcel = Nothing
+
+WScript.Echo "Conversion de '" & sFileIn & "' vers '" & sFileOut & "' terminée avec succès."
+WScript.Quit 0 ' Succès
+    """
+    try:
+        with open(chemin_script_vbs, 'w', encoding='utf-8') as f:
+            f.write(contenu_vbs)
+        print(f"Script VBS temporaire créé : {chemin_script_vbs}")
+    except IOError as e:
+        print(f"Erreur critique: Impossible d'écrire le script VBS temporaire à {chemin_script_vbs}. {e}")
+        sys.exit(1) # Arrêt du script Python
+
+def convertir_xlsx_en_csv(chemin_xlsx, repertoire_temporaire):
+    """Convertit un fichier XLSX en CSV en utilisant Excel via VBScript."""
+    if not os.path.exists(chemin_xlsx):
+        print(f"Erreur: Fichier XLSX non trouvé: {chemin_xlsx}")
+        return None
+
+    nom_base_xlsx = os.path.basename(chemin_xlsx)
+    nom_fichier_csv = os.path.splitext(nom_base_xlsx)[0] + ".csv"
+    chemin_csv_sortie = os.path.join(repertoire_temporaire, nom_fichier_csv)
+    
+    # Nom du script VBS (sera créé dans le répertoire temporaire)
+    nom_script_vbs = "excel_vers_csv_temp.vbs"
+    chemin_script_vbs_complet = os.path.join(repertoire_temporaire, nom_script_vbs)
+
+    _generer_script_vbs(chemin_script_vbs_complet)
+
+    print(f"Tentative de conversion de {chemin_xlsx} en {chemin_csv_sortie} via VBScript...")
+    try:
+        # Utiliser des chemins absolus pour cscript, c'est plus sûr
+        cmd = [
+            'cscript', '//Nologo', # //Nologo pour ne pas afficher le logo Microsoft cscript
+            os.path.abspath(chemin_script_vbs_complet),
+            os.path.abspath(chemin_xlsx),
+            os.path.abspath(chemin_csv_sortie)
+        ]
+        # shell=False est plus sûr. check=False pour gérer nous-mêmes les erreurs.
+        resultat = subprocess.run(cmd, capture_output=True, text=True, encoding='cp850', errors='replace', check=False) # cp850 pour la console Windows
+
+        if resultat.returncode == 0:
+            print(f"Conversion XLSX -> CSV réussie pour '{chemin_xlsx}'.")
+            print(f"Sortie VBScript: {resultat.stdout.strip()}")
+            return chemin_csv_sortie
+        else:
+            print(f"Erreur lors de la conversion XLSX -> CSV pour {chemin_xlsx}.")
+            print(f"Code de retour VBScript: {resultat.returncode}")
+            print(f"Sortie VBScript (stdout): {resultat.stdout.strip()}")
+            print(f"Sortie VBScript (stderr): {resultat.stderr.strip()}") # stderr est souvent vide pour cscript
+            return None
+    except FileNotFoundError:
+        print("Erreur critique: La commande 'cscript' n'a pas été trouvée. Assurez-vous qu'elle est dans le PATH système.")
+        return None
+    except Exception as e:
+        print(f"Erreur inattendue lors de l'exécution du VBScript: {e}")
+        return None
+    # Le script VBS temporaire sera supprimé avec le répertoire temporaire à la fin.
+
+def lire_donnees_csv(chemin_fichier, colonne_id_unique, encodage=CSV_ENCODING):
+    """Lit les données d'un fichier CSV et les stocke dans un dictionnaire indexé par l'ID unique."""
+    print(f"Lecture des données depuis : {chemin_fichier}")
+    donnees_dict = {}
+    entetes = []
+    try:
+        with open(chemin_fichier, mode='r', encoding=encodage, newline='') as fichier_entree:
+            lecteur_csv = csv.DictReader(fichier_entree)
+            entetes = lecteur_csv.fieldnames
+            if not entetes:
+                print(f"Avertissement: Le fichier CSV {chemin_fichier} semble vide ou sans en-têtes.")
+                return {}, []
+            
+            if colonne_id_unique not in entetes:
+                print(f"Erreur critique: La colonne ID unique '{colonne_id_unique}' n'est pas trouvée dans les en-têtes de {chemin_fichier}.")
+                print(f"En-têtes disponibles : {entetes}")
+                return None, entetes # Erreur
+
+            for ligne in lecteur_csv:
+                id_unique = ligne.get(colonne_id_unique)
+                if id_unique and id_unique.strip(): # S'assurer que l'ID n'est pas vide
+                    if id_unique in donnees_dict:
+                        print(f"Avertissement: ID unique '{id_unique}' dupliqué dans {chemin_fichier}. L'entrée précédente sera écrasée.")
+                    donnees_dict[id_unique] = ligne
+                else:
+                    print(f"Avertissement: Ligne sans ID unique (ou ID vide) trouvée dans {chemin_fichier}. Ligne ignorée : {ligne}")
+            print(f"{len(donnees_dict)} enregistrements lus avec succès depuis {chemin_fichier}.")
+            return donnees_dict, entetes
+    except FileNotFoundError:
+        print(f"Erreur: Fichier non trouvé : {chemin_fichier}")
+        return None, []
+    except Exception as e:
+        print(f"Erreur lors de la lecture du fichier CSV {chemin_fichier}: {e}")
+        return None, []
+
+def ecrire_donnees_csv(chemin_fichier, liste_de_dictionnaires, entetes, encodage=CSV_ENCODING):
+    """Écrit une liste de dictionnaires dans un fichier CSV."""
+    print(f"Écriture des données mises à jour vers : {chemin_fichier}")
+    try:
+        with open(chemin_fichier, mode='w', encoding=encodage, newline='') as fichier_sortie:
+            # extrasaction='ignore' pour ignorer les champs dans les dictionnaires qui ne sont pas dans les entêtes
+            # Ceci est utile si des colonnes temporaires ont été ajoutées aux dictionnaires par erreur.
+            # Cependant, nous nous assurons que `entetes` contient toutes les colonnes nécessaires.
+            writer = csv.DictWriter(fichier_sortie, fieldnames=entetes, extrasaction='ignore')
+            writer.writeheader()
+            writer.writerows(liste_de_dictionnaires)
+        print(f"{len(liste_de_dictionnaires)} enregistrements écrits avec succès dans {chemin_fichier}.")
+        return True
+    except Exception as e:
+        print(f"Erreur lors de l'écriture du fichier CSV {chemin_fichier}: {e}")
+        return False
+
+# --- Logique principale de synchronisation ---
+def main():
+    """Fonction principale orchestrant le processus de synchronisation."""
+    print("Démarrage du processus de synchronisation des données...")
+
+    # Création d'un répertoire temporaire pour les fichiers intermédiaires (CSV convertis, etc.)
+    repertoire_temporaire = tempfile.mkdtemp(prefix="sync_inter_logiciels_")
+    print(f"Répertoire temporaire créé : {repertoire_temporaire}")
+
+    chemin_csv_source = SOURCE_FILE_PATH
+    chemin_csv_cible = TARGET_FILE_PATH
+
+    # --- Conversion XLSX -> CSV si nécessaire ---
+    if SOURCE_FILE_PATH.lower().endswith(".xlsx"):
+        print("Le fichier source est un XLSX, conversion en CSV en cours...")
+        chemin_csv_source = convertir_xlsx_en_csv(SOURCE_FILE_PATH, repertoire_temporaire)
+        if not chemin_csv_source:
+            print("Échec de la conversion du fichier source XLSX. Arrêt du script.")
+            shutil.rmtree(repertoire_temporaire)
+            sys.exit(1)
+    elif not SOURCE_FILE_PATH.lower().endswith(".csv"):
+        print(f"Erreur: Le fichier source '{SOURCE_FILE_PATH}' n'est ni .csv ni .xlsx. Arrêt.")
+        shutil.rmtree(repertoire_temporaire)
+        sys.exit(1)
+
+    if TARGET_FILE_PATH.lower().endswith(".xlsx"):
+        print("Le fichier cible est un XLSX, conversion en CSV en cours...")
+        chemin_csv_cible = convertir_xlsx_en_csv(TARGET_FILE_PATH, repertoire_temporaire)
+        if not chemin_csv_cible:
+            print("Échec de la conversion du fichier cible XLSX. Arrêt du script.")
+            shutil.rmtree(repertoire_temporaire)
+            sys.exit(1)
+    elif not TARGET_FILE_PATH.lower().endswith(".csv"):
+        print(f"Erreur: Le fichier cible '{TARGET_FILE_PATH}' n'est ni .csv ni .xlsx. Arrêt.")
+        shutil.rmtree(repertoire_temporaire)
+        sys.exit(1)
+
+    # --- Lecture des données ---
+    donnees_source, _ = lire_donnees_csv(chemin_csv_source, UNIQUE_ID_COLUMN_SOURCE)
+    if donnees_source is None: # Erreur critique lors de la lecture
+        print("Échec de la lecture des données source. Arrêt du script.")
+        shutil.rmtree(repertoire_temporaire)
+        sys.exit(1)
+    if not donnees_source:
+        print("Les données source sont vides. Aucune mise à jour à effectuer. Arrêt du script.")
+        shutil.rmtree(repertoire_temporaire)
+        sys.exit(0) # Sortie normale, pas d'erreur
+
+    donnees_cible, entetes_cible_originaux = lire_donnees_csv(chemin_csv_cible, UNIQUE_ID_COLUMN_TARGET)
+    if donnees_cible is None: # Erreur critique lors de la lecture
+        print("Échec de la lecture des données cible. Arrêt du script.")
+        shutil.rmtree(repertoire_temporaire)
+        sys.exit(1)
+    if not entetes_cible_originaux: # Si le fichier cible est vide ou sans entête
+        print("Les données cibles sont vides ou les en-têtes n'ont pas pu être lus. Impossible de continuer. Arrêt.")
+        shutil.rmtree(repertoire_temporaire)
+        sys.exit(1)
+
+
+    # --- Processus de synchronisation ---
+    print("Début de la synchronisation des enregistrements...")
+    compteur_mises_a_jour = 0
+    # Copie des entêtes cibles pour pouvoir potentiellement ajouter des colonnes mappées qui n'existeraient pas
+    entetes_cible_finaux = list(entetes_cible_originaux) 
+
+    for id_source, enregistrement_source in donnees_source.items():
+        if id_source in donnees_cible:
+            enregistrement_cible_a_maj = donnees_cible[id_source]
+            changement_effectue_sur_enregistrement = False
+
+            for col_source, (col_cible, func_transform) in COLUMN_MAPPING.items():
+                if col_source in enregistrement_source:
+                    valeur_source = enregistrement_source[col_source]
+                    valeur_a_ecrire = valeur_source # Par défaut, la valeur source
+
+                    if func_transform: # Si une fonction de transformation est définie
+                        try:
+                            valeur_a_ecrire = func_transform(valeur_source)
+                        except Exception as e:
+                            print(f"Avertissement: Erreur lors de l'application de la transformation pour la colonne source '{col_source}' (ID: {id_source}). Valeur originale utilisée. Erreur: {e}")
+                    
+                    # Mettre à jour la valeur dans l'enregistrement cible
+                    # même si la colonne cible n'existe pas encore (elle sera ajoutée)
+                    if enregistrement_cible_a_maj.get(col_cible) != valeur_a_ecrire:
+                        enregistrement_cible_a_maj[col_cible] = valeur_a_ecrire
+                        changement_effectue_sur_enregistrement = True
+
+                    # S'assurer que la colonne cible est dans les entêtes finaux
+                    if col_cible not in entetes_cible_finaux:
+                        print(f"Info: La colonne cible mappée '{col_cible}' n'était pas dans les en-têtes originaux du fichier cible. Elle sera ajoutée.")
+                        entetes_cible_finaux.append(col_cible)
+                else:
+                    # La colonne source définie dans COLUMN_MAPPING n'existe pas dans cet enregistrement source
+                    print(f"Avertissement: La colonne source '{col_source}' (mappée vers '{col_cible}') n'a pas été trouvée dans l'enregistrement source avec ID '{id_source}'. Ce champ ne sera pas mis à jour pour cet enregistrement.")
+
+            if changement_effectue_sur_enregistrement:
+                compteur_mises_a_jour += 1
+        else:
+            # L'ID source n'a pas été trouvé dans les données cibles
+            print(f"Info: L'ID source '{id_source}' n'a pas été trouvé dans les données cibles. Cet enregistrement sera ignoré.")
+            # Ici, on pourrait décider d'ajouter de nouveaux enregistrements si c'était un besoin.
+            # Pour l'instant, on ne fait que mettre à jour les existants.
+
+    print(f"Synchronisation terminée. {compteur_mises_a_jour} enregistrement(s) cible(s) ont été modifié(s).")
+
+    # Convertir le dictionnaire de données cibles mis à jour en une liste de dictionnaires pour l'écriture CSV
+    liste_donnees_cible_maj = list(donnees_cible.values())
+
+    # --- Écriture du fichier de sortie et copie vers SharePoint ---
+    # Nom du fichier de sortie basé sur le nom du fichier cible original
+    nom_base_cible_original = os.path.basename(TARGET_FILE_PATH) # Utiliser le nom original (xlsx ou csv)
+    nom_fichier_sortie_base = os.path.splitext(nom_base_cible_original)[0] + "_updated"
+    nom_fichier_sortie_csv = nom_fichier_sortie_base + ".csv"
+    
+    chemin_sortie_sharepoint_complet = os.path.join(SHAREPOINT_OUTPUT_DIRECTORY, nom_fichier_sortie_csv)
+
+    # S'assurer que le répertoire SharePoint existe
+    try:
+        if not os.path.exists(SHAREPOINT_OUTPUT_DIRECTORY):
+            print(f"Le répertoire SharePoint '{SHAREPOINT_OUTPUT_DIRECTORY}' n'existe pas. Tentative de création...")
+            os.makedirs(SHAREPOINT_OUTPUT_DIRECTORY, exist_ok=True) # exist_ok=True pour ne pas lever d'erreur s'il existe déjà
+            print(f"Répertoire SharePoint créé ou existant : {SHAREPOINT_OUTPUT_DIRECTORY}")
+    except OSError as e:
+        print(f"Erreur critique: Impossible de créer le répertoire SharePoint '{SHAREPOINT_OUTPUT_DIRECTORY}'. {e}")
+        print("Veuillez vérifier le chemin et vos droits d'accès.")
+        shutil.rmtree(repertoire_temporaire)
+        sys.exit(1)
+
+    # Écrire d'abord le fichier CSV mis à jour dans le répertoire temporaire
+    chemin_csv_maj_temporaire = os.path.join(repertoire_temporaire, "fichier_cible_mis_a_jour_final.csv")
+    if ecrire_donnees_csv(chemin_csv_maj_temporaire, liste_donnees_cible_maj, entetes_cible_finaux):
+        print(f"Tentative de copie du fichier mis à jour vers SharePoint : {chemin_sortie_sharepoint_complet}")
+        try:
+            shutil.copy2(chemin_csv_maj_temporaire, chemin_sortie_sharepoint_complet) # copy2 préserve plus de métadonnées
+            print(f"Fichier mis à jour copié avec succès vers : {chemin_sortie_sharepoint_complet}")
+        except Exception as e:
+            print(f"Erreur lors de la copie du fichier vers SharePoint ({chemin_sortie_sharepoint_complet}): {e}")
+            print("Veuillez vérifier la connectivité réseau, le chemin SharePoint et les permissions.")
+            print(f"Le fichier mis à jour est disponible localement ici : {chemin_csv_maj_temporaire}")
+    else:
+        print("Échec de l'écriture du fichier CSV mis à jour dans le répertoire temporaire. Copie vers SharePoint annulée.")
+        print(f"Les fichiers intermédiaires sont dans : {repertoire_temporaire}")
+
+    # --- Nettoyage ---
+    print(f"Nettoyage du répertoire temporaire : {repertoire_temporaire}")
+    try:
+        shutil.rmtree(repertoire_temporaire)
+        print("Répertoire temporaire nettoyé avec succès.")
+    except OSError as e:
+        print(f"Avertissement: Impossible de supprimer complètement le répertoire temporaire {repertoire_temporaire}. {e}")
+        print("Vous devrez peut-être le supprimer manuellement.")
+
+    print("Processus de synchronisation terminé.")
+
+if __name__ == "__main__":
+    # Vérification préliminaire de la disponibilité de cscript (pour VBScript)
+    try:
+        # Tente d'exécuter cscript sans arguments pour voir s'il est trouvé et fonctionne
+        subprocess.run(['cscript', '//Nologo'], capture_output=True, timeout=3, check=False, shell=False)
+        print("Vérification initiale : 'cscript.exe' semble disponible.")
+    except FileNotFoundError:
+        print("ERREUR CRITIQUE: 'cscript.exe' n'a pas été trouvé dans le PATH système.")
+        print("Ce script nécessite cscript.exe pour la conversion des fichiers Excel.")
+        print("Veuillez vous assurer que cscript.exe (généralement dans C:\\Windows\\System32) est accessible via le PATH.")
+        sys.exit(1) # Arrêt immédiat
+    except subprocess.TimeoutExpired:
+        print("Avertissement: La vérification de 'cscript.exe' a expiré. On suppose qu'il est disponible mais potentiellement lent.")
+        pass # On continue, mais cela pourrait indiquer un problème
+
+    # Vérification basique du chemin SharePoint
+    if not (SHAREPOINT_OUTPUT_DIRECTORY and len(SHAREPOINT_OUTPUT_DIRECTORY) > 3 and (SHAREPOINT_OUTPUT_DIRECTORY[1:3] == ":\\" or SHAREPOINT_OUTPUT_DIRECTORY.startswith("\\\\"))):
+         print(f"Avertissement: Le chemin SharePoint configuré '{SHAREPOINT_OUTPUT_DIRECTORY}' ne ressemble pas à un lecteur mappé standard (ex: S:\\dossier) ou un chemin UNC (ex: \\\\serveur\\partage). Veuillez vérifier la configuration.")
+
+    main()
