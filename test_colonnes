@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Outil de synchronisation inter-logiciels
+Développé par: Paul-KERHERVE
+"""
+import os, csv, datetime, shutil
+
+#==============================================================================
+# CONFIGURATION
+#==============================================================================
+
+# Dossier de travail et fichiers
+DOSSIER_TRAVAIL = "Music/projet"
+FICHIER_SOURCE = "source.csv"
+FICHIER_CIBLE = "cible.csv"
+
+# Identifiants uniques pour faire correspondre les enregistrements
+COLONNE_ID_SOURCE = "id_client"  # Nom de la colonne ID dans le fichier source
+COLONNE_ID_CIBLE = "id"          # Nom de la colonne ID dans le fichier cible
+
+# Colonnes que nous voulons synchroniser
+COLONNES_A_SYNC = ["nom", "prenom", "tel", "email", "statut", "categorie"]
+
+# Configuration des correspondances entre colonnes source et cible
+CORRESPONDANCE = {
+    "var": "variable", 
+    "tel": "telephone", 
+    "id_client": "id",
+    "nom": "nom_client", 
+    "prenom": "prenom_client", 
+    "email": "adresse_email",
+    "statut": "status_client", 
+    "categorie": "cat_client",
+}
+
+# Configuration des correspondances pour valeurs de menus déroulants
+TRANSFORMATIONS = {
+    "statut": {
+        "A": "Actif", 
+        "I": "Inactif", 
+        "P": "En attente", 
+        "B": "Bloqué",
+    },
+    "categorie": {
+        "PRO": "Professionnel", 
+        "PART": "Particulier", 
+        "ASSOC": "Association", 
+        "ADMIN": "Administration",
+    },
+}
+
+#==============================================================================
+# FONCTIONS POUR LIRE ET ÉCRIRE DES CSV
+#==============================================================================
+
+def afficher_colonnes():
+    """Affiche les noms exacts des colonnes dans les fichiers source et cible"""
+    print("\n=== ANALYSE DES COLONNES DES FICHIERS ===")
+    
+    for description, fichier, colonne_id in [
+        ("SOURCE", FICHIER_SOURCE, COLONNE_ID_SOURCE),
+        ("CIBLE", FICHIER_CIBLE, COLONNE_ID_CIBLE)
+    ]:
+        print(f"\nFichier {description} ({fichier}):")
+        if not os.path.exists(fichier):
+            print(f"  ❌ ERREUR: Fichier introuvable!")
+            continue
+            
+        try:
+            with open(fichier, 'r', newline='') as f:
+                reader = csv.reader(f)
+                headers = next(reader, None)
+                if not headers:
+                    print(f"  ❌ ERREUR: Fichier vide ou mal formaté!")
+                    continue
+                    
+                print(f"  Colonnes trouvées ({len(headers)}):")
+                for i, col in enumerate(headers):
+                    print(f"    {i}: '{col}'")
+                
+                # Vérifier la présence de la colonne ID
+                if colonne_id in headers:
+                    idx = headers.index(colonne_id)
+                    print(f"  ✅ Colonne ID '{colonne_id}' trouvée à l'index {idx}")
+                else:
+                    print(f"  ❌ ERREUR: Colonne ID '{colonne_id}' introuvable!")
+                    print(f"  Colonnes disponibles: {headers}")
+        except Exception as e:
+            print(f"  ❌ ERREUR lors de la lecture: {str(e)}")
+    
+    print("\n")
+
+
+def read_csv(filepath, id_column):
+    """
+    Lit un fichier CSV et retourne un dictionnaire indexé par l'ID.
+    
+    Args:
+        filepath: Nom ou chemin du fichier CSV
+        id_column: Nom de la colonne contenant l'identifiant unique
+        
+    Returns:
+        Tuple (dictionnaire de données, liste des entêtes)
+    """
+    print(f"Lecture du fichier {filepath}...")
+    data = {}
+    headers = []
+    
+    try:
+        # Ouvrir le fichier en mode lecture
+        with open(filepath, 'r', newline='') as csvfile:
+            reader = csv.reader(csvfile)
+            headers = next(reader)  # Première ligne = entêtes
+            
+            # Vérifier si les en-têtes sont présents
+            if not headers:
+                print(f"Erreur: Le fichier {filepath} semble vide ou mal formaté")
+                return {}, []
+            
+            # Vérifier explicitement si la colonne ID existe
+            if id_column not in headers:
+                print(f"❌ ERREUR CRITIQUE: Colonne '{id_column}' non trouvée dans {filepath}")
+                print(f"Colonnes disponibles: {headers}")
+                return {}, headers
+            
+            # Trouver l'index de la colonne ID
+            id_index = headers.index(id_column)
+            
+            # Lire chaque ligne et créer un dictionnaire par ID
+            for row_num, row in enumerate(reader, start=2):  # start=2 car ligne 1 = en-têtes
+                if len(row) <= id_index:
+                    print(f"Avertissement: Ligne {row_num} trop courte, ignorée")
+                    continue
+                
+                if not row[id_index].strip():
+                    print(f"Avertissement: Ligne {row_num} sans ID, ignorée")
+                    continue
+                
+                record_id = row[id_index]
+                # Créer un dictionnaire {nom_colonne: valeur}
+                data[record_id] = {headers[i]: row[i] if i < len(row) else "" for i in range(len(headers))}
+        
+        print(f"Lecture terminée: {len(data)} enregistrements chargés")
+        return data, headers
+        
+    except FileNotFoundError:
+        print(f"❌ ERREUR: Fichier '{filepath}' introuvable")
+        return {}, []
+    except Exception as e:
+        print(f"❌ ERREUR lors de la lecture: {str(e)}")
+        return {}, headers
+
+
+def write_csv(data, headers, filepath):
+    """
+    Écrit les données dans un fichier CSV.
+    
+    Args:
+        data: Dictionnaire des données à écrire
+        headers: Liste des entêtes de colonnes
+        filepath: Chemin du fichier de sortie
+    """
+    print(f"Écriture du fichier {filepath}...")
+    try:
+        with open(filepath, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            
+            # Écrire les entêtes
+            writer.writerow(headers)
+            
+            # Écrire les données
+            for record_id, record in data.items():
+                # Construire chaque ligne en maintenant l'ordre des colonnes
+                row = [record.get(header, "") for header in headers]
+                writer.writerow(row)
+        
+        print(f"Écriture terminée: {len(data)} enregistrements écrits")
+        return True
+    except Exception as e:
+        print(f"❌ ERREUR lors de l'écriture: {str(e)}")
+        return False
+
+
+#==============================================================================
+# SYNCHRONISATION DES DONNÉES
+#==============================================================================
+
+def map_value(value, column_name):
+    """
+    Convertit une valeur selon les correspondances des menus déroulants.
+    
+    Args:
+        value: La valeur à transformer
+        column_name: Le nom de la colonne
+    
+    Returns:
+        La valeur transformée ou la valeur originale
+    """
+    # Si la colonne a des valeurs de menu déroulant et la valeur existe dans ce menu
+    if column_name in TRANSFORMATIONS and value in TRANSFORMATIONS[column_name]:
+        return TRANSFORMATIONS[column_name][value]
+    
+    # Sinon, ne pas modifier la valeur
+    return value
+
+
+def synchronize_data(source_data, target_data):
+    """
+    Synchronise les données source vers les données cible.
+    
+    Args:
+        source_data: Dictionnaire des données source
+        target_data: Dictionnaire des données cible
+        
+    Returns:
+        Dictionnaire des données cible mises à jour
+    """
+    print("Synchronisation des données...")
+    
+    if not source_data or not target_data:
+        print("❌ ERREUR: Impossible de synchroniser, données vides")
+        return target_data
+    
+    stats = {
+        "total_source": len(source_data),
+        "total_target": len(target_data),
+        "matched": 0,      # Enregistrements trouvés dans les deux fichiers
+        "updated": 0,      # Enregistrements modifiés
+        "unchanged": 0,    # Enregistrements trouvés mais non modifiés
+        "not_found": 0     # IDs source non trouvés dans la cible
+    }
+    
+    # Pour chaque enregistrement dans la source
+    for source_id, source_record in source_data.items():
+        # Est-ce que cet ID existe dans la cible?
+        if source_id in target_data:
+            stats["matched"] += 1
+            target_record = target_data[source_id]
+            
+            # Compter les changements pour cet enregistrement
+            changes_for_record = 0
+            
+            # Pour chaque correspondance définie
+            for source_col, target_col in CORRESPONDANCE.items():
+                # Vérifier si cette colonne est dans notre liste à synchroniser
+                if source_col in COLONNES_A_SYNC:
+                    # Si les deux fichiers ont cette colonne
+                    if source_col in source_record and target_col in target_record:
+                        # Convertir la valeur si nécessaire (ex: "A" → "Actif")
+                        value = source_record[source_col]
+                        mapped_value = map_value(value, source_col)
+                        
+                        # Si les valeurs sont différentes, mettre à jour
+                        if mapped_value != target_record[target_col]:
+                            target_data[source_id][target_col] = mapped_value
+                            changes_for_record += 1
+            
+            # Compter cet enregistrement comme mis à jour ou inchangé
+            if changes_for_record > 0:
+                stats["updated"] += 1
+            else:
+                stats["unchanged"] += 1
+        else:
+            # ID source non trouvé dans la cible
+            stats["not_found"] += 1
+    
+    print(f"Synchronisation terminée:")
+    print(f"  - {stats['matched']} enregistrements correspondants trouvés")
+    print(f"  - {stats['updated']} enregistrements mis à jour")
+    print(f"  - {stats['unchanged']} enregistrements inchangés")
+    print(f"  - {stats['not_found']} enregistrements non trouvés dans la cible")
+    
+    return target_data
+
+
+#==============================================================================
+# FONCTION PRINCIPALE
+#==============================================================================
+
+def main():
+    """Fonction principale du script."""
+    print("=== OUTIL DE SYNCHRONISATION INTER-LOGICIELS ===")
+    print(f"Démarré le {datetime.datetime.now().strftime('%Y-%m-%d à %H:%M:%S')}")
+    
+    try:
+        # 1. Changer le répertoire de travail
+        print(f"Changement du répertoire de travail vers: {DOSSIER_TRAVAIL}")
+        os.chdir(DOSSIER_TRAVAIL)
+        print(f"Répertoire actuel: {os.getcwd()}")
+        
+        # 2. Afficher les noms exacts des colonnes (débogage)
+        afficher_colonnes()
+        
+        # 3. Utiliser les noms de fichiers prédéfinis
+        source_path = FICHIER_SOURCE
+        target_path = FICHIER_CIBLE
+        
+        # 4. Vérifier si les fichiers existent
+        if not os.path.exists(source_path):
+            print(f"❌ ERREUR: Le fichier source '{source_path}' n'existe pas.")
+            return
+        if not os.path.exists(target_path):
+            print(f"❌ ERREUR: Le fichier cible '{target_path}' n'existe pas.")
+            return
+        
+        # 5. Créer une sauvegarde du fichier cible
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = f"{target_path}.{timestamp}.bak"
+        shutil.copy2(target_path, backup_path)
+        print(f"Sauvegarde créée: {backup_path}")
+        
+        # 6. Lire les données des fichiers CSV
+        source_data, source_headers = read_csv(source_path, COLONNE_ID_SOURCE)
+        target_data, target_headers = read_csv(target_path, COLONNE_ID_CIBLE)
+        
+        if not source_data or not target_data:
+            print("❌ ERREUR: Impossible de lire les données des fichiers.")
+            return
+        
+        # 7. Synchroniser les données
+        updated_data = synchronize_data(source_data, target_data)
+        
+        # 8. Générer un nom pour le fichier de sortie
+        output_filename = f"données_sync_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+        
+        # 9. Écrire le fichier de sortie
+        if write_csv(updated_data, target_headers, output_filename):
+            print(f"\nSynchronisation terminée avec succès!")
+            print(f"Fichier de résultat: {output_filename}")
+        
+    except Exception as e:
+        print(f"\n❌ ERREUR INATTENDUE: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+    
+    print("=" * 50)
+
+
+if __name__ == "__main__":
+    main()
