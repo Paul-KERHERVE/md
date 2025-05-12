@@ -20,7 +20,11 @@ column_mapping = {
     'Application Profile': 'Application profile',
     'Application type': 'Application type',
     'Cloud Hosting Model label': 'Cloud Asset',
-    'Confidentialy label': Intrisic Confidentiality'
+    'Confidentialy label': 'Intrisic Confidentiality'
+}
+
+transformations = {
+    "Profile 1": "P1",  # (ancienne) sera remplacé par (nouvelle)
 }
 
 def lire_csv(file_path, delimiter):
@@ -50,18 +54,24 @@ def synchronisation():
     source_lookup = {row[ID_SOURCE]: row for row in source_data if row.get(ID_SOURCE)}
     
     # Synchronisation : pour chaque ligne du fichier target, on met à jour seulement les colonnes définies dans le mapping
-    for row in target_data:
-        target_id = row.get(ID_TARGET)
-        if target_id and target_id in source_lookup:
-            source_row = source_lookup[target_id]
-            # Parcourir le mapping pour synchroniser les colonnes spécifiques
-            for col_target, col_source in column_mapping.items():
-                if col_target in row and col_source in source_row:
-                    if row[col_target] != source_row[col_source]:
-                        print(f"ID {target_id}: mise à jour de '{col_target}' de '{row[col_target]}' vers '{source_row[col_source]}'")
-                        row[col_target] = source_row[col_source]
-        else:
-            print(f"ID {target_id} non trouvé dans le fichier source.")
+for row in target_data:
+    target_id = row.get(ID_TARGET)
+    if target_id and target_id in source_lookup:
+        source_row = source_lookup[target_id]
+        # Parcourir le mapping pour synchroniser les colonnes spécifiques
+        for col_target, col_source in column_mapping.items():
+            if col_target in row and col_source in source_row:
+                # On récupère la valeur source
+                source_value = source_row[col_source]
+                # Vérification si une transformation est définie pour la colonne cible
+                if col_target in transformations:
+                    source_value = transformations[col_target](source_value)
+                # Mise à jour si besoin
+                if row[col_target] != source_value:
+                    print(f"ID {target_id}: mise à jour de '{col_target}' de '{row[col_target]}' vers '{source_value}'")
+                    row[col_target] = source_value
+    else:
+        print(f"ID {target_id} non trouvé dans le fichier source.")
     
     # Export complet du fichier target synchronisé (toutes les colonnes sont exportées)
     ecrire_csv(EXPORT_FILE, target_data, target_headers, delimiter=';')
