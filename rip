@@ -1,0 +1,69 @@
+import csv
+import os
+import sys
+
+DOSSIER_TRAVAIL = "Music/projet"
+os.chdir(DOSSIER_TRAVAIL)
+
+# Fichiers source et target
+SOURCE_FILE = 'source.csv'   # Le fichier source considéré comme à jour (délimité par une virgule)
+TARGET_FILE = 'target.csv'   # Le fichier à synchroniser (délimité par un point-virgule)
+EXPORT_FILE = 'target_update.csv'  # Fichier d'export de la target mise à jour
+
+# Noms d'identifiant dans chaque fichier
+ID_SOURCE = 'u_code'
+ID_TARGET = 'EASY code'
+
+# Mapping : nom de la colonne dans le fichier target -> nom correspondant dans le fichier source
+column_mapping = {
+    'Nom': 'lastname',
+    'Prenom': 'firstname',
+    'Email': 'email'
+}
+
+def lire_csv(file_path, delimiter):
+    """Lit un fichier CSV et retourne la liste des lignes et les en-têtes grâce à csv.DictReader."""
+    if not os.path.exists(file_path):
+        sys.exit(f"Erreur: le fichier {file_path} n'existe pas.")
+    with open(file_path, mode='r', newline='') as f:
+        reader = csv.DictReader(f, delimiter=delimiter)
+        data = list(reader)
+        headers = reader.fieldnames
+    return data, headers
+
+def ecrire_csv(file_path, data, headers, delimiter):
+    """Écrit les données (liste de dictionnaires) dans un fichier CSV."""
+    with open(file_path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=headers, delimiter=delimiter)
+        writer.writeheader()
+        for row in data:
+            writer.writerow(row)
+
+def synchronisation():
+    # Lecture des fichiers source et target
+    source_data, source_headers = lire_csv(SOURCE_FILE, delimiter=',')
+    target_data, target_headers = lire_csv(TARGET_FILE, delimiter=';')
+    
+    # Création d'un dictionnaire d'indexation pour le fichier source (clé: ID)
+    source_lookup = {row[ID_SOURCE]: row for row in source_data if row.get(ID_SOURCE)}
+    
+    # Synchronisation : pour chaque ligne du fichier target, on met à jour seulement les colonnes définies dans le mapping
+    for row in target_data:
+        target_id = row.get(ID_TARGET)
+        if target_id and target_id in source_lookup:
+            source_row = source_lookup[target_id]
+            # Parcourir le mapping pour synchroniser les colonnes spécifiques
+            for col_target, col_source in column_mapping.items():
+                if col_target in row and col_source in source_row:
+                    if row[col_target] != source_row[col_source]:
+                        print(f"ID {target_id}: mise à jour de '{col_target}' de '{row[col_target]}' vers '{source_row[col_source]}'")
+                        row[col_target] = source_row[col_source]
+        else:
+            print(f"ID {target_id} non trouvé dans le fichier source.")
+    
+    # Export complet du fichier target synchronisé (toutes les colonnes sont exportées)
+    ecrire_csv(EXPORT_FILE, target_data, target_headers, delimiter=';')
+    print("Export terminé dans:", EXPORT_FILE)
+
+if __name__ == '__main__':
+    synchronisation()
