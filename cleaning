@@ -1,0 +1,61 @@
+import csv
+import os
+import sys
+
+def read_csv(file_path, encoding='utf-8'):
+    """
+    Lit un fichier CSV en s'adaptant aux différents formatages.
+
+    Pour le fichier nommé "source":
+      - Le séparateur est la virgule (',')
+      - Les lignes peuvent commencer par une double quote en trop. Si la ligne
+        commence par '"' alors on supprime ce caractère.
+
+    Pour le fichier nommé "destination":
+      - Le séparateur est le point-virgule (';')
+      - Le formatage est classique (sans nettoyage particulier).
+
+    Pour les autres fichiers, on utilise la configuration par défaut (virgule).
+
+    La fonction retourne une liste de dictionnaires ainsi que la liste des en-têtes.
+    """
+    if not os.path.exists(file_path):
+        sys.exit(f"Erreur : le fichier '{file_path}' n'existe pas.")
+
+    # On récupère le nom de base pour déterminer le format.
+    base_name = os.path.basename(file_path)
+
+    if base_name == "source":
+        delimiter = ','
+        quotechar = '"'
+    elif base_name == "destination":
+        delimiter = ';'
+        quotechar = '"'
+    else:
+        delimiter = ','
+        quotechar = '"'
+    
+    with open(file_path, 'r', encoding=encoding, newline='') as f:
+        # Pour le fichier source, on applique un nettoyage pour supprimer une double quote en trop
+        if base_name == "source":
+            def cleaned_lines():
+                for line in f:
+                    # Si la ligne commence par une double quote, on la retire.
+                    if line.startswith('"'):
+                        yield line[1:]
+                    else:
+                        yield line
+            reader = csv.DictReader(cleaned_lines(), delimiter=delimiter, quotechar=quotechar)
+        else:
+            reader = csv.DictReader(f, delimiter=delimiter, quotechar=quotechar)
+        data = list(reader)
+    return data, reader.fieldnames
+
+# Exemple d'utilisation
+if __name__ == '__main__':
+    # Pour tester, modifiez file_path en "source" ou "destination" selon le format.
+    file_path = "source"  # ou "destination"
+    data, headers = read_csv(file_path)
+    print("En-têtes :", headers)
+    for row in data:
+        print(row)
