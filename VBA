@@ -1,0 +1,67 @@
+Sub SynchronizeWorkbooks()
+    Dim sourceWorkbook As Workbook, targetWorkbook As Workbook
+    Dim sourceSheet As Worksheet, targetSheet As Worksheet
+    Dim lastRowSource As Long, lastRowTarget As Long
+    Dim i As Long, j As Long
+    Dim keyVal As Variant
+    ' Création d'un objet dictionnaire pour le mapping
+    Dim mapping As Object
+    Set mapping = CreateObject("Scripting.Dictionary")
+    
+    ' Définir le mapping : "Nom de colonne source" => "Nom de colonne cible"
+    ' La clé "ID" est également utilisée pour identifier les enregistrements des deux fichiers
+    mapping.Add "ID", "ID"
+    mapping.Add "Nom", "NomCible"
+    mapping.Add "Prénom", "PrenomCible"
+    mapping.Add "Email", "EmailCible"
+    mapping.Add "Téléphone", "TelCible"
+    
+    ' Définitions des chemins d'accès complets pour le classeur source et le classeur cible
+    Dim sourcePath As String, targetPath As String
+    sourcePath = "C:\Chemin\Vers\Source.xlsx"
+    targetPath = "C:\Chemin\Vers\Target.xlsx"
+    
+    ' Ouvrir les classeurs source et cible
+    Set sourceWorkbook = Workbooks.Open(sourcePath)
+    Set targetWorkbook = Workbooks.Open(targetPath)
+    
+    ' Sélectionner la première feuille dans chaque classeur (adapter si besoin)
+    Set sourceSheet = sourceWorkbook.Sheets(1)
+    Set targetSheet = targetWorkbook.Sheets(1)
+    
+    ' Déterminer le nombre de lignes utilisées dans chaque classeur
+    lastRowSource = sourceSheet.Cells(sourceSheet.Rows.Count, "A").End(xlUp).Row
+    lastRowTarget = targetSheet.Cells(targetSheet.Rows.Count, "A").End(xlUp).Row
+    
+    ' Parcourir chaque ligne du classeur cible à partir de la ligne 2 (supposant que la première ligne contient les en-têtes)
+    For i = 2 To lastRowTarget
+        keyVal = targetSheet.Cells(i, Application.Match(mapping("ID"), targetSheet.Rows(1), 0)).Value
+        
+        ' Pour chaque ligne du classeur source, vérifier si l'ID correspond
+        For j = 2 To lastRowSource
+            If sourceSheet.Cells(j, Application.Match("ID", sourceSheet.Rows(1), 0)).Value = keyVal Then
+                Dim srcHdr As Variant, tgtHdr As Variant, srcCol As Variant, tgtCol As Variant
+                ' Pour chaque mapping de colonne, récupérer la valeur dans la ligne source et mettre à jour la cellule cible
+                For Each srcHdr In mapping.Keys
+                    tgtHdr = mapping(srcHdr)
+                    
+                    ' Trouver la position de la colonne dans le classeur source et dans le classeur cible, selon les en-têtes
+                    srcCol = Application.Match(srcHdr, sourceSheet.Rows(1), 0)
+                    tgtCol = Application.Match(tgtHdr, targetSheet.Rows(1), 0)
+                    
+                    If Not IsError(srcCol) And Not IsError(tgtCol) Then
+                        targetSheet.Cells(i, tgtCol).Value = sourceSheet.Cells(j, srcCol).Value
+                    End If
+                Next srcHdr
+                Exit For  ' Sortir de la boucle source une fois la correspondance trouvée
+            End If
+        Next j
+    Next i
+    
+    ' Sauvegarder et fermer les classeurs
+    targetWorkbook.Save
+    sourceWorkbook.Close SaveChanges:=False
+    targetWorkbook.Close SaveChanges:=True
+    
+    MsgBox "La synchronisation est terminée.", vbInformation
+End Sub
