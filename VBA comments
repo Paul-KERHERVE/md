@@ -1,0 +1,73 @@
+Sub SynchronizeWorkbooks()
+    Dim sourceWorkbook As Workbook, targetWorkbook As Workbook
+    Dim sourceSheet As Worksheet, targetSheet As Worksheet
+    Dim lastRowSource As Long, lastRowTarget As Long
+    Dim i As Long, j As Long
+    Dim keyVal As Variant
+    Dim mapping As Object
+    Set mapping = CreateObject("Scripting.Dictionary")
+
+    '-------------------------------
+    ' 1. À PERSONNALISER : MAPPING
+    '-------------------------------
+    ' Pour chaque colonne à synchroniser :
+    ' mapping.Add "NomColonneSource", "NomColonneCible"
+    ' Si l'ID a un nom différent dans chaque fichier, adapte-le ici aussi !
+    mapping.Add "ID", "ID"                  ' ID dans source => ID dans cible
+    mapping.Add "Nom", "NomCible"           ' Nom dans source => NomCible dans cible
+    mapping.Add "Prénom", "PrenomCible"     ' Prénom dans source => PrenomCible dans cible
+    mapping.Add "Email", "EmailCible"       ' Email dans source => EmailCible dans cible
+    mapping.Add "Téléphone", "TelCible"     ' Téléphone dans source => TelCible dans cible
+
+    '-------------------------------------------------
+    ' 2. À PERSONNALISER : CHEMINS DES FICHIERS EXCEL
+    '-------------------------------------------------
+    Dim sourcePath As String, targetPath As String
+    sourcePath = "C:\Chemin\Vers\Source.xlsx"   ' <-- Mets ici le chemin complet de ton fichier source
+    targetPath = "C:\Chemin\Vers\Target.xlsx"   ' <-- Mets ici le chemin complet de ton fichier cible
+
+    '-------------------------------------------------
+    ' 3. À PERSONNALISER : FEUILLES À UTILISER
+    '-------------------------------------------------
+    ' Par défaut, la macro utilise la première feuille de chaque classeur.
+    ' Si tes feuilles ne sont pas en première position, précise leur nom :
+    ' Set sourceSheet = sourceWorkbook.Sheets("NomDeLaFeuille")
+    ' Set targetSheet = targetWorkbook.Sheets("NomDeLaFeuille")
+    
+    ' Ouvrir les classeurs source et cible
+    Set sourceWorkbook = Workbooks.Open(sourcePath)
+    Set targetWorkbook = Workbooks.Open(targetPath)
+    Set sourceSheet = sourceWorkbook.Sheets(1)
+    Set targetSheet = targetWorkbook.Sheets(1)
+
+    '----------------------------------------------
+    ' Le reste NE SE PERSONNALISE PAS normalement
+    '----------------------------------------------
+    lastRowSource = sourceSheet.Cells(sourceSheet.Rows.Count, "A").End(xlUp).Row
+    lastRowTarget = targetSheet.Cells(targetSheet.Rows.Count, "A").End(xlUp).Row
+
+    For i = 2 To lastRowTarget
+        keyVal = targetSheet.Cells(i, Application.Match(mapping("ID"), targetSheet.Rows(1), 0)).Value
+
+        For j = 2 To lastRowSource
+            If sourceSheet.Cells(j, Application.Match("ID", sourceSheet.Rows(1), 0)).Value = keyVal Then
+                Dim srcHdr As Variant, tgtHdr As Variant, srcCol As Variant, tgtCol As Variant
+                For Each srcHdr In mapping.Keys
+                    tgtHdr = mapping(srcHdr)
+                    srcCol = Application.Match(srcHdr, sourceSheet.Rows(1), 0)
+                    tgtCol = Application.Match(tgtHdr, targetSheet.Rows(1), 0)
+                    If Not IsError(srcCol) And Not IsError(tgtCol) Then
+                        targetSheet.Cells(i, tgtCol).Value = sourceSheet.Cells(j, srcCol).Value
+                    End If
+                Next srcHdr
+                Exit For
+            End If
+        Next j
+    Next i
+
+    targetWorkbook.Save
+    sourceWorkbook.Close SaveChanges:=False
+    targetWorkbook.Close SaveChanges:=True
+
+    MsgBox "La synchronisation est terminée.", vbInformation
+End Sub
