@@ -1,0 +1,6 @@
+Dim colID As Variant
+colID = Application.Match(mapping("ID"), targetSheet.Rows(1), 0)
+If IsError(colID) Then
+    MsgBox "Colonne ID non trouvée", vbCritical
+    Exit Sub
+End If
