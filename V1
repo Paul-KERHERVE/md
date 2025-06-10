@@ -77,6 +77,15 @@ Sub SynchronizeWorkbooks()
                         ElseIf srcVal = "Profile 2" Then
                           srcVal = "P2"
                         End If
+            ElseIf tgtHdr = "Traceability label" Then
+                If srcVal = "None" Then
+                    codeVal = "1"
+                End If
+            colType = Application.Match("Traceability code", targetSheet.Rows(1), 0)
+            If Not IsErros(colType) Then
+                targetSheet.Cells(i, colType).Value = codeVal
+            End If
+    
 
 
 
